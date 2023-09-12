@@ -1,5 +1,4 @@
-﻿/*  Copyright (C) 2016 Buxtronix and Alexander Pruss
-
+/*
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, version 3 of the License.
@@ -55,7 +54,7 @@ class Settings {
     int     rainthreshold;                     // Threshold of rain sensor
     float   uvadjust;                          // ajuste UV
     float   altitude;                          // altitude over sea level 
-    int     windpoolinterval;                      // interval to send wind measures to MQTT
+    int     windpoolinterval;                  // interval to send wind measures to MQTT
     bool    inecomode;                         // indica si estaba en ECO cuando se apago
     bool    groveactive;                       // Is Grove sensor installed/active ?
     } data;

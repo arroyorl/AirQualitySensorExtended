@@ -19,7 +19,7 @@
 // Usage: Include these definitions in your sketch
 // 
 //#define DEBUG  //Allows standard COMx debug
-//#define RDEBUG  //Allows reote debug
+//#define RDEBUG  //Allows remote debug
 // Select only one option 
 // Both option commented for final release (no debug)
 //
@@ -32,24 +32,24 @@
 // #include "rdebug.h"
 /////////////////////////////////////////////////////
 
-#ifndef _RDEBUG.H
-#define _RDEBUG.H
+#ifndef _RDEBUG_H 
+#define _RDEBUG_H 
 
 #define DEFAULT_PORT  8888
 #define DEFAULT_SPEED 115200
 #define WELCOME "Rdebug: Welcome!"
 
-#ifdef DEBUG
+#ifdef DEBUG 
 # define DebugStart() {Serial.begin(DEFAULT_SPEED); while (!Serial){} }
 # define DebugLn(s) Serial.println((s))
 # define Debug(s) Serial.print((s))
-#define _DEBUG
+#define _DEBUG 
 #else
-#ifdef RDEBUG
+#ifdef RDEBUG 
 # define DebugStart() remoteserial.begin(DEFAULT_SPEED, DEFAULT_PORT)
 # define DebugLn(s) remoteserial.println((s))
 # define Debug(s) remoteserial.print((s))
-#define _DEBUG
+#define _DEBUG 
 #else
 # define DebugStart() //
 # define DebugLn(s) //
@@ -140,12 +140,12 @@ class Rserial {
         Serial.println("Client Disconnected");
         clientconnected = false;
       }
-      return clientconnected;
     }
+    return clientconnected;
   };
   
 };
-#ifdef RDEBUG
+#ifdef RDEBUG 
 Rserial     remoteserial;
 #endif
 #endif

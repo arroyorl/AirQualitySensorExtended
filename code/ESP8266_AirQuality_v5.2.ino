@@ -20,14 +20,14 @@
 //      humidityCompensation funcion (based on hackAir github)
 //
 //  0.3 Moved SDS011 to GPIO12 and 14
-//      included CCS811 sensor
+//      included CCS811 gas sensor
 //
 //  0.4 Added Grove Multichannel Gas Sensor
 //
 //  0.4.1 added Weatherunderground PM2.5, PM10, NO2 and CO data
 //
 //  0.5 adjusted Vcc & batery level
-//      added nominalBatt as nominla Batt (maximum) level
+//      added nominalBatt as nominal Batt (maximum) level
 //      changed GetBattLevel to use nominalBatt
 //
 //  1.0 Added support for ThingSpeak
@@ -67,30 +67,40 @@
 //  4.1 changed rain send frequency to 30 secs.
 //      corrected an error in JSON message on handleRawData function
 //
+//  5.0 changed HTTPS access method to avoid fingerprint
+//      removed fingerprint update web page
+//
+//  5.1 TSL2561 set to manual gain (1x) and 101 ms integration time
+//
+//  5.2 updated (corrected) formula for wind speed calculation
+//      Wind speed as per https://pop.fsck.pl/hardware/wh-sp-ws01.html
+//      is 0.34 * pulses/sec (in m/s)
+//
 ///////////////////////////////////////////////////////////////
 
 
-#include <ESP8266WiFi.h>
+#include <ESP8266WiFi.h>    
 #include <ESP8266WiFiMulti.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
+#include <WiFiClientSecureBearSSL.h>
 
-#include <PubSubClient.h>
+#include <PubSubClient.h>  // v 2.8
 
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 
-#include <ThingSpeak.h>
+#include <ThingSpeak.h>  // v 2.0.1
 
 #define SENSORTYPE BME280
 #define SENSORNAME "BME280"
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
-#include <Adafruit_TSL2561_U.h>
+#include <Adafruit_Sensor.h>  // Adafruit Unified Sensor v 1.1.12
+#include <Adafruit_BME280.h>  // v 2.2.2
+#include <Adafruit_TSL2561_U.h>  // Adafruit TSL 2561 v 1.1.0
 
-#define FVERSION  "v4.1"
+#define FVERSION  "v5.2"
 
 /////////////////SENSOR TYPE///////////////////////
 // Uncomment whatever type you're using!         //
@@ -102,17 +112,17 @@
 #define RDEBUG
 ///////////////////////////////////////////////////
 
-#include <SoftwareSerial.h>
-#include <Sds011.h>
+#include <SoftwareSerial.h> // EspSoftwareSerial v 8.1.0
+#include <esp_sds011.h> // v 2.2.0
 
 #ifdef CCS811
-  #include <Adafruit_Sensor.h>
-  #include <Adafruit_CCS811.h>
+  #include <Adafruit_Sensor.h>  // Adafruit Unified Sensor v 1.1.12
+  #include <Adafruit_CCS811.h>  // Adafruit CCS811 v 1.1.1
 #endif
 
 #ifdef GROVE
   #include <Wire.h>
-  #include <MutichannelGasSensor.h>
+  #include <MutichannelGasSensor.h> // arduino_916704 library v 1.0.0 (https://github.com/Seeed-Studio/Mutichannel_Gas_Sensor)
 #endif
 
 WiFiClient espClient;
@@ -125,7 +135,6 @@ PubSubClient client(espClient);
 #include "settings.h"
 #include "mainPage.h"
 #include "initPage.h"
-#include "fingerPage.h"
 
 #define GPIO0 0
 #define GPIO1 1
@@ -159,7 +168,7 @@ PubSubClient client(espClient);
 #define RAIN_ANALOG A0     // A0
 
 // Define Red and green LEDs
-#ifdef ARDUINO_ESP8266_NODEMCU
+#ifdef ARDUINO_ESP8266_NODEMCU_ESP12E
   #define RED_LED GPIO12 // D6
   #define GREEN_LED GPIO10 // D12 - SD3
 #endif
@@ -215,9 +224,8 @@ float       CH4ppm;
 float       H2ppm;
 float       C2H5OHppm;
 float       windspeed;
-float       windspeedmph;
-float       maxwindspeedmph=0;
-float       sumwindspeedmph=0.0;
+float       maxwindspeed=0.0;
+float       sumwindspeed=0.0;
 int         numsampleswind=0;
 float       lux;
 bool        TSL2561active = false;
@@ -324,7 +332,7 @@ float runpress=0;
 *************************************************/
 //Interrupt routines (these are called by the hardware interrupts, not by the main code)
 //-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-void ICACHE_RAM_ATTR wspeedIRQ()
+void IRAM_ATTR wspeedIRQ()
 // Activated by the magnet in the anemometer (2 ticks per rotation)
 {
     if (millis() - lastWindIRQ > 15) // Ignore switch-bounce glitches less than 15ms (99.5 MPH max reading) after the reed switch closes
@@ -342,12 +350,12 @@ float get_wind_speed()
 
     deltaTime /= 1000.0; //Convert to seconds
 
-    float WSpeed = (float)windClicks / deltaTime; //3 / 0.750s = 4
+    float WSpeed = (float)windClicks / deltaTime; // clics/sec
 
     windClicks = 0; //Reset and start watching for new wind
     lastWindCheck = millis();
 
-    WSpeed *= 1.492; //4 * 1.492 = 5.968MPH
+    WSpeed *= 0.34 * 3.6; // 0.34 m/s click * 3.6 = speed in Km/h
 
     return(WSpeed);
 }
@@ -377,13 +385,13 @@ bool TSL2561setup()
   delay(500);
 
   /* You can also manually set the gain or enable auto-gain support */
-  // tsl.setGain(TSL2561_GAIN_1X);      /* No gain ... use in bright light to avoid sensor saturation */
+  tsl.setGain(TSL2561_GAIN_1X);      /* No gain ... use in bright light to avoid sensor saturation */
   // tsl.setGain(TSL2561_GAIN_16X);     /* 16x gain ... use in low light to boost sensitivity */
-  tsl.enableAutoRange(true);            /* Auto-gain ... switches automatically between 1x and 16x */
+  // tsl.enableAutoRange(true);            /* Auto-gain ... switches automatically between 1x and 16x */
   
   /* Changing the integration time gives you better sensor resolution (402ms = 16-bit data) */
-  tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_13MS);      /* fast but low resolution */
-  // tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_101MS);  /* medium resolution and speed   */
+  // tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_13MS);      /* fast but low resolution */
+  tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_101MS);  /* medium resolution and speed   */
   // tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_402MS);  /* 16-bit data but slowest conversions */
 
   /* Update these values depending on what you've set above! */  
@@ -396,6 +404,15 @@ float getTSL2561lux()
 {
   /* Get a new sensor event */ 
   sensors_event_t event;
+  sensor_t sensor;
+
+  tsl.getSensor(&sensor);
+
+  DebugLn ("Reading TSL2561 data");
+  DebugLn ("Max Value:    " + String(sensor.max_value) + " lux");
+  DebugLn ("Min Value:    " + String(sensor.min_value) + " lux");
+  DebugLn ("Resolution:   " + String(sensor.resolution) + " lux");  
+
   tsl.getEvent(&event);
 
   return event.light;
@@ -684,32 +701,6 @@ void handleInitForm() {
   ap_setup_done = 1;
 }
 
-void handleFinger() {
-  DebugLn("handleFinger");
-  
-  String s = FPSTR(FINGER_page);
-  s.replace("@@FINGERPTR@@", settings.data.wunderfinger);
-  s.replace("@@UPDATERESPONSE@@", httpUpdateResponse);
-  server.send(200, "text/html", s);
-  httpUpdateResponse = "";
-
-}
-
-void handleFingerForm() {
-  DebugLn("handleFingerForm");
-
-  String fingerptr = server.arg("fingerptr");
-  fingerptr.toCharArray(settings.data.wunderfinger,FINGERPRINT_LENGTH);
-  httpUpdateResponse = "Fingerprint updated.";
-  server.sendHeader("Location", "/fingerprint");
-  server.send(302, "text/plain", "Moved");
-  httpUpdateResponse = "";
-
-  Debug("Updated fingerprint: ");
-  DebugLn(settings.data.wunderfinger);
-  settings.Save();
-}
-
 void handleRoot() {
   DebugLn("handleRoot");
  
@@ -754,7 +745,7 @@ void handleRoot() {
 void handleRawData() {
   DebugLn("handleRawData");
 
-  windspeed = (sumwindspeedmph / (float)numsampleswind) * 1.609344;  //Wind speed in Km/h
+  windspeed = (sumwindspeed / (float)numsampleswind ) ;  //Wind speed in Km/h
 
   readRainSensor();
   
@@ -776,7 +767,7 @@ void handleRawData() {
                         ", \"dewpoint\":" + String(dewpoint) +
                         ", \"sealevelpressure\":" + String(sealevelpressure) +
                         ", \"windspeed\":" + String(windspeed) +
-                        ", \"maxwindspeed\":" + String(maxwindspeedmph * 1.609344) +
+                        ", \"maxwindspeed\":" + String(maxwindspeed) +
                         ", \"lux\":" + String(lux) +
                         ", \"running\":" + String(is_SDS_running) + 
                         ", \"CO2ppm\":" + String(CO2ppm) + 
@@ -788,9 +779,10 @@ void handleRawData() {
 }
 
 void sendHTTP (String httpPost){
+  WiFiClient client;
   HTTPClient http;
   DebugLn(httpPost);
-  http.begin(httpPost);
+  http.begin(client, httpPost);
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   int httpCode = http.POST("");
   DebugLn(httpCode);    
@@ -798,25 +790,31 @@ void sendHTTP (String httpPost){
 }
 
 void sendHTTPGet (String httpGet){
+  WiFiClient client;
   HTTPClient http;
   DebugLn(httpGet);
-  http.begin(httpGet);
+  http.begin(client, httpGet);
   int httpCode = http.GET();
   DebugLn(httpCode);    
   http.end();
 }
 
-void sendHTTPsGet (String httpGet, String host_fingerptr){
-  HTTPClient http;
+void sendHTTPsGet (String httpGet){
+  HTTPClient https;
+  std::unique_ptr<BearSSL::WiFiClientSecure>client(new BearSSL::WiFiClientSecure);
+
+  // fingerprint not needed
+  client->setInsecure();
+  // send data
   DebugLn("HTTPsGet: " + httpGet);
-  http.begin(httpGet, host_fingerptr);
-  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  int httpCode = http.GET();
-  String payload = http.getString();
+  https.begin(*client, httpGet);
+  // http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  int httpCode = https.GET();
+  String payload = https.getString();
 
   DebugLn("HTTPsGet return code: " + String(httpCode));    // this return 200 when success
   DebugLn(payload);     // this will get the response
-  http.end();
+  https.end();
 
 }
 
@@ -1067,13 +1065,16 @@ int res;
       base_topic = String(settings.data.mqtttopic) + "/" + String(settings.data.name);
       DebugLn("base topic: " + base_topic);
       client.subscribe((base_topic + "/setup/#").c_str());
-      return true;
+      // return true;
     } else {
-      Debug ("MQTT reconnecxion failed, rc=");
+      Debug ("MQTT reconnection failed, rc=");
       DebugLn (client.state());
-      return false;
+      // return false;
     }
   }
+  else // already connected
+    res = true;
+  return res;
 }
 
 /*************************************************
@@ -1083,6 +1084,7 @@ void mqtt_send(String subtopic, String message, bool retain){
 
 String topic = base_topic + "/" + subtopic;
 
+  DebugLn("mqtt_send, topic: " + topic + ", payload: " + message);
   if(mqtt_reconnect() ) {
     // send data to topic
     client.publish(topic.c_str(), message.c_str(), retain);
@@ -1175,7 +1177,7 @@ float tempf;
 float dewptf;
 float baromin;
 
-  if(strlen(settings.data.stationID) > 0 && strlen(settings.data.stationKey) > 0 && strlen(settings.data.wunderfinger) >0 ){
+  if(strlen(settings.data.stationID) > 0 && strlen(settings.data.stationKey) > 0 ){
     // Send data to Wunderground
     DebugLn("--- Sending data to Wunderground ---");
     String  weatherData =  "https://rtupdate.wunderground.com/weatherstation/updateweatherstation.php?";
@@ -1205,7 +1207,7 @@ float baromin;
   #endif
   
     // send to Wunderground
-    sendHTTPsGet(weatherData,settings.data.wunderfinger);
+    sendHTTPsGet(weatherData);
   }
                 
 }
@@ -1301,9 +1303,6 @@ void setup() {
   server.on("/setup", handleRoot);
   server.on("/form", handleForm);
   server.on("/data",handleRawData);
-  server.on("/fingerprint",handleFinger);
-  server.on("/fingerForm",handleFingerForm);
-  //server.on("/io", handleIO);
   delay(100);
   server.begin(); 
    delay(3000);
@@ -1319,9 +1318,9 @@ void setup() {
   pinMode(ANNEMOMETER_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(ANNEMOMETER_PIN), wspeedIRQ, FALLING);
   // reset value and counters
-  sumwindspeedmph = 0.0;
+  sumwindspeed = 0.0;
   numsampleswind = 0;
-  maxwindspeedmph = 0.0;
+  maxwindspeed = 0.0;
 
   start = millis();
   DebugLn("Started at "+String(start));
@@ -1385,16 +1384,16 @@ void loop() {
       lastSecond += 5000;
 
       //Get wind speed 
-      windspeedmph = get_wind_speed();
-      sumwindspeedmph += windspeedmph;
-      maxwindspeedmph = max(windspeedmph, maxwindspeedmph);
+      windspeed = get_wind_speed(); //Wind speed in Km/h
+      sumwindspeed += windspeed;
+      maxwindspeed = max(windspeed, maxwindspeed);
       numsampleswind++;
       if (numsampleswind == settings.data.windpoolinterval) {
-        windspeed = (sumwindspeedmph / (float)numsampleswind) * 1.609344;  //Wind speed in Km/h
+        windspeed = (sumwindspeed / (float)numsampleswind);  
         mqtt_send("data/windspeed", String(windspeed), false);
-        mqtt_send("data/maxwindspeed", String(maxwindspeedmph * 1.609344), false);
-        sumwindspeedmph = 0.0;
-        maxwindspeedmph = 0.0;
+        mqtt_send("data/maxwindspeed", String(maxwindspeed), false);
+        sumwindspeed = 0.0;
+        maxwindspeed = 0.0;
         numsampleswind = 0;
       }
   }

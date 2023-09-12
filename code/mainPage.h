@@ -37,7 +37,7 @@ const char MAIN_page[] PROGMEM = R"=====(
 <tr><td>Temp:  </td><td>@@TEMPERATURE@@ &#186C</td></tr>
 <tr><td>Humid:  </td><td>@@HUMIDITY@@ %</td></tr>
 <tr><td>Press:  </td><td>@@SEALEVELPRESSURE@@ mb</td></tr>
-<tr><td>RainA:    </td><td>@@RAINA@@ V.</td></tr>
+<tr><td>RainA:    </td><td>@@RAINA@@ </td></tr>
 
 <tr><td colspan=2 class=heading>WiFi Setup</td></tr>
 <tr><td>SSID:</td><td><input type=text name="ssid" value="@@SSID@@"></td></tr>
